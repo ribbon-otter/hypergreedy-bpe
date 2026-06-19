@@ -10,3 +10,5 @@ More detailed:
 Repeat until you have your target number of tokens.
 
 In my limited testing, Hypergreedy BPE appears to have a 3% to 4% improvement in token fertility (average number of tokens per word).
+
+This code-base uses the optimization of first spliting by word and then working over that rather than the raw text. This means that tokens can not be found that cross word boundaries. 

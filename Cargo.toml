@@ -1,7 +1,10 @@
 [package]
-name = "frontiersmind2"
+name = "hypergreedy-bpe"
+authors = ["ribbon-otter"]
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+license-file = "LICENSE.txt"
 
 [dependencies]
 counter = "0.7.1"
