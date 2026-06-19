@@ -22,10 +22,10 @@ static BASE_TOKENS : u16 = 256; //must be 256 by other assumptions in code
 
 fn main() -> io::Result<()> {
 	let library = gen_word_counts("./iliad-modern-greek.txt")?;
-	let (vocab, compressed_lib) = bpe_optimized(library.clone());
+	let (vocab, compressed_lib) = bpe_hypergreedy(library.clone());
 	let opt_fertility =  fertility(&compressed_lib);
-	println!("optimized bpe : fertility {}", fertility(&compressed_lib));
-	println!("optimized bpe: {:?}", vocab.iter().take(10).map(to_string).collect::<Vec<_>>());
+	println!("hypergreedy bpe : fertility {}", fertility(&compressed_lib));
+	println!("hypergreedy bpe: {:?}", vocab.iter().take(10).map(to_string).collect::<Vec<_>>());
 	let (vocab, compressed_lib) = bpe(library.clone());
 	let old_fertility =  fertility(&compressed_lib);
 	println!("bpe : fertility {}", old_fertility);
@@ -46,7 +46,7 @@ fn bpe(mut library : Counter<Token>) -> (Vec<Token>, Counter<Token>){
 	(vocab, library)
 }
 
-fn bpe_optimized(mut library : Counter<Token>) -> (Vec<Token>, Counter<Token>) {
+fn bpe_hypergreedy(mut library : Counter<Token>) -> (Vec<Token>, Counter<Token>) {
 	//vocab[i] is the expantion of token number (i - base_tokens)
 	let mut vocab : Vec<Token> = Vec::with_capacity(NEW_TOKEN_COUNT.into());
 	for i in 0..NEW_TOKEN_COUNT {
