@@ -1,0 +1,9 @@
+[package]
+name = "frontiersmind2"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+counter = "0.7.1"
+rayon = "1.12.0"
+rustc-hash = "2.1.2"
