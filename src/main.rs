@@ -31,10 +31,12 @@ fn main() -> io::Result<()> {
 	println!("word counts generated. distinct word count: {}", library.len());
 	let (vocab, compressed_lib) = bpe_hypergreedy(library.clone(), ticker);
 	let opt_fertility =  fertility(&compressed_lib);
+	println!();
 	println!("hypergreedy bpe : fertility {}", fertility(&compressed_lib));
 	println!("hypergreedy bpe: {:?}", vocab.iter().take(10).map(to_string).collect::<Vec<_>>());
 	let (vocab, compressed_lib) = bpe(library.clone(), ticker);
 	let old_fertility =  fertility(&compressed_lib);
+	println!();
 	println!("bpe : fertility {}", old_fertility);
 	println!("bpe: {:?}", vocab.iter().take(10).map(to_string).collect::<Vec<_>>());
 	println!();
@@ -218,6 +220,7 @@ fn encode(text : &Vec<u16>, vocab : &Vec<Token>) -> Vec<u16> {
 	result
 }
 
+///a simple token to string, displays ? for any meta tokens
 fn to_string(t : &Token) -> String {
 	let x = 
 	t.iter().map(|&u| {
