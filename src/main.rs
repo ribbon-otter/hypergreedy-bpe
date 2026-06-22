@@ -1,6 +1,7 @@
+#![allow(unused)]
 
 use std::fs::File;
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Write};
 use std::path::Path;
 use rustc_hash::FxHashMap;
 
@@ -8,6 +9,7 @@ mod counter;
 use counter::Counter;
 
 use rayon::prelude::*; 
+use std::env;
 
 type Token = Vec<u16>;
 
@@ -15,18 +17,23 @@ type Token = Vec<u16>;
 ///triggers using the extention
 static EXT_RATIO : usize = 2;
 
+///beyond the 256 tokens that already exist, how many should we add?
 static NEW_TOKEN_COUNT : u16 = 1000;
 static BASE_TOKENS : u16 = 256; //must be 256 by other assumptions in code
 //token numbers from 0 to 255 (inclusive) represent the raw bytes
 //while tokens greater than that represent compressions
 
 fn main() -> io::Result<()> {
-	let library = gen_word_counts("./iliad-modern-greek.txt")?;
-	let (vocab, compressed_lib) = bpe_hypergreedy(library.clone());
+	let file_argument : String = env::args().nth(1).unwrap_or(String::from("./AliceInWonderland.txt"));
+
+	let library = gen_word_counts(file_argument, sometimes_logger);
+	println!();
+	println!("word counts generated. distinct word count: {}", library.len());
+	let (vocab, compressed_lib) = bpe_hypergreedy(library.clone(), ticker);
 	let opt_fertility =  fertility(&compressed_lib);
 	println!("hypergreedy bpe : fertility {}", fertility(&compressed_lib));
 	println!("hypergreedy bpe: {:?}", vocab.iter().take(10).map(to_string).collect::<Vec<_>>());
-	let (vocab, compressed_lib) = bpe(library.clone());
+	let (vocab, compressed_lib) = bpe(library.clone(), ticker);
 	let old_fertility =  fertility(&compressed_lib);
 	println!("bpe : fertility {}", old_fertility);
 	println!("bpe: {:?}", vocab.iter().take(10).map(to_string).collect::<Vec<_>>());
@@ -35,24 +42,40 @@ fn main() -> io::Result<()> {
 	Ok(())
 }
 
-fn bpe(mut library : Counter<Token>) -> (Vec<Token>, Counter<Token>){
+fn ticker(i : u16) {
+	if i % (NEW_TOKEN_COUNT / (80 - 1)) == 0 {
+		print!(".");
+		io::stdout().flush().unwrap();
+	}
+}
+
+fn sometimes_logger(i : usize) {
+	if i % 100_000 == 0 {
+		print!("\rreading line: {} ", i);
+		io::stdout().flush().unwrap();
+	}
+}
+
+fn bpe<F : Fn(u16)>(mut library : Counter<Token>, progress_fn : F) -> (Vec<Token>, Counter<Token>){
 	//vocab[i] is the expantion of token number (i - base_tokens)
 	let mut vocab : Vec<Token> = Vec::with_capacity(NEW_TOKEN_COUNT.into());
 	for i in 0..NEW_TOKEN_COUNT {
 		let new_token = find_candidate(&library).0;
 		library = replace_in_library(&library, &new_token, i + BASE_TOKENS);
 		vocab.push(new_token);
+		progress_fn(i);
 	}
 	(vocab, library)
 }
 
-fn bpe_hypergreedy(mut library : Counter<Token>) -> (Vec<Token>, Counter<Token>) {
+fn bpe_hypergreedy<F : Fn(u16)>(mut library : Counter<Token>, progress_fn : F) -> (Vec<Token>, Counter<Token>) {
 	//vocab[i] is the expantion of token number (i - base_tokens)
 	let mut vocab : Vec<Token> = Vec::with_capacity(NEW_TOKEN_COUNT.into());
 	for i in 0..NEW_TOKEN_COUNT {
 		let new_token = find_best_token(&library).0;
 		library = replace_in_library(&library, &new_token, i + BASE_TOKENS);
 		vocab.push(new_token);
+		progress_fn(i);
 	}
 	(vocab, library)
 }
@@ -110,7 +133,7 @@ fn find_best_token(library : &Counter<Token>) -> (Token, usize) {
 
 fn find_candidate(library : &Counter<Token>) -> (Token, usize) {
 	let pair_counts : Counter<Token> = 
- 		library.par_iter().map(|(t, &weight)|
+ 		library.into_iter().map(|(t, &weight)|
 			t.windows(2).map(|a| a.to_vec()).collect::<Counter<Token>>() * weight
 		).sum();
 	pair_counts.most_common().unwrap().into()
@@ -118,7 +141,7 @@ fn find_candidate(library : &Counter<Token>) -> (Token, usize) {
 
 fn find_best_extention(library : &Counter<Token>, candidate : &Token) -> Option<(Token, usize)> {
 	let extention_counts : Counter<Token> = 
- 		library.par_iter().map(|(t, &weight)|
+ 		library.into_iter().map(|(t, &weight)|
 			t.windows(candidate.len()+1)
 			 .filter(
 						|win| win[0..win.len()-1] == *candidate //try extending backwards
@@ -128,17 +151,27 @@ fn find_best_extention(library : &Counter<Token>, candidate : &Token) -> Option<
 	extention_counts.most_common().into()
 }
 
-fn gen_word_counts<P>(filename : P) -> io::Result<Counter<Token>>
+fn echo<T> (a : T, prefix : &str) -> T 
+	where T : std::fmt::Debug {
+	println!("{:?}: {:?}", prefix, a);
+	a
+}
+
+fn gen_word_counts<P, F : Fn(usize)>(filename : P, progress_fn : F) -> Counter<Token>
 where P: AsRef<Path>{
-	let lines = read_lines(filename)? ;
+	use unicode_segmentation::UnicodeSegmentation;
+	let lines = read_lines(filename).unwrap();
 	let word_counts : Counter<Token> =
-		lines.map_while(Result::ok).par_bridge().map(|x| {
-			x.split(' ').map(
+		lines.map_while(Result::ok).enumerate().map(|(i,x)| {
+			progress_fn(i);
+			//unicode_words effectively strips all the punctuation and whitespace 
+			// from the dataset and I expect it to behave preversely on chinese and japanese
+			x.unicode_words().map( 
 				//turn words into Vec<u16>s
 				|s| s.as_bytes().into_iter().map(|&b| b as u16).collect::<Token>()
 			).collect::<Counter<Token>>()
 		}).sum();
-	return Ok(word_counts);
+	return word_counts;
 }
 
 fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>> 
@@ -197,7 +230,7 @@ fn to_string(t : &Token) -> String {
 fn fertility(library : &Counter<Token>) -> f64 {
 	//take a weighted average of the token lengths
 	let total_token_lengths : usize =
-		library.par_iter().map(|(key, value)| key.len() * value).sum();
+		library.into_iter().map(|(key, value)| key.len() * value).sum();
 	total_token_lengths as f64 / library.total() as f64
 }
 

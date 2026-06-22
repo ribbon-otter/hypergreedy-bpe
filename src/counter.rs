@@ -9,8 +9,6 @@ use std::fmt::Debug;
 
 use rayon::prelude::*; 
 
-
-
 #[derive(Clone, Debug)]
 pub struct Counter<T> {
 	map: FxHashMap<T, usize>,
@@ -108,7 +106,11 @@ where T: Hash + Eq + Clone + Sync
 	}
 	///total number of items which have been counted
 	pub fn total(&self) -> usize {
-		self.par_iter().map(|(_key, value)| value).sum()
+		self.into_iter().map(|(_key, value)| value).sum()
+	}
+	
+	pub fn into_vec(self) -> Vec<(T, usize)> {
+		self.map.into_iter().collect()
 	}
 }
 
