@@ -84,12 +84,7 @@ where T: Hash + Eq + Clone + Sync
 	where
 		I: IntoIterator<Item = T>,
 	{
-		for item in iterable {
-			let entry = self.map.entry(item.clone()).or_insert(0);
-			*entry += 1;
-			let value = *entry;
-			private_check_current_max(&mut self.current_max, &item, value);
-			}
+		self.update_weighted(iterable, 1);
 	}
 
 	pub fn update_weighted<I>(&mut self, iterable: I, weight : usize) 

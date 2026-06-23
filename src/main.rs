@@ -17,17 +17,19 @@ type Token = Vec<u16>;
 static EXT_RATIO : usize = 2;
 
 ///beyond the 256 tokens that already exist, how many should we add?
-static NEW_TOKEN_COUNT : u16 = 6;
+static NEW_TOKEN_COUNT : u16 = 1000;
 static BASE_TOKENS : u16 = 256; //must be 256 by other assumptions in code
+#[allow(unused)]
+static TOTAL_TOKENS : u16 = NEW_TOKEN_COUNT + BASE_TOKENS; 
+//above checks if our desired number of tokens is possible inside a u16
+
 //token numbers from 0 to 255 (inclusive) represent the raw bytes
 //while tokens greater than that represent compressions
 
 fn main() -> io::Result<()> {
 	let file_argument : String = env::args().nth(1).unwrap_or(String::from("./AliceInWonderland.txt"));
 
-	println!("start");
 	let library = gen_word_counts(file_argument, sometimes_logger);
-	println!("end");
 	println!();
 	println!("word counts generated. distinct word count: {}", library.len());
 	let (vocab, compressed_lib) = bpe_hypergreedy(library.clone(), ticker);
@@ -67,7 +69,10 @@ fn bpe<F : Fn(u16)>(mut library : Counter<Token>, progress_fn : F) -> (Vec<Token
 	//vocab[i] is the expantion of token number (i - base_tokens)
 	let mut vocab : Vec<Token> = Vec::with_capacity(NEW_TOKEN_COUNT.into());
 	for i in 0..NEW_TOKEN_COUNT {
-		let new_token = find_candidate(&library).0;
+		let Some((new_token, _)) = find_candidate(&library) else {
+			println!("no compression is possible at {} new tokens", i);
+			break;
+		};
 		library = replace_in_library(&library, &new_token, i + BASE_TOKENS);
 		vocab.push(new_token);
 		progress_fn(i);
@@ -79,7 +84,10 @@ fn bpe_hypergreedy<F : Fn(u16)>(mut library : Counter<Token>, progress_fn : F) -
 	//vocab[i] is the expantion of token number (i - base_tokens)
 	let mut vocab : Vec<Token> = Vec::with_capacity(NEW_TOKEN_COUNT.into());
 	for i in 0..NEW_TOKEN_COUNT {
-		let new_token = find_best_token(&library).0;
+		let Some((new_token, _)) = find_best_token(&library) else {
+			println!("no compression is possible at {} new tokens", i);
+			break;
+		};
 		library = replace_in_library(&library, &new_token, i + BASE_TOKENS);
 		vocab.push(new_token);
 		progress_fn(i);
@@ -117,8 +125,11 @@ fn replace_in_library(library : &Counter<Token>, from : &[u16], to : u16) -> Cou
 	new_library
 }
 
-fn find_best_token(library : &Counter<Token>) -> (Token, usize) {
-	let mut can = find_candidate(&library);
+//returns None if no more compression is possible because every word in the library
+//in only one token long
+//otherwise returns the best token
+fn find_best_token(library : &Counter<Token>) -> Option<(Token, usize)> {
+	let mut can = find_candidate(&library)?;
 	loop {
 		
 		let maybe_ext = find_best_extention(&library, &can.0);
@@ -129,17 +140,17 @@ fn find_best_token(library : &Counter<Token>) -> (Token, usize) {
 			//the candidate is the true extention
 			can = ext
 			} else {
-				break can
+				break Some(can)
 			}
 		} else {
 			//otherwise we found the best candidate
-			break can
+			break Some(can)
 		}
 	}
 }
 
 ///find the most commonly occurring byte pair in the library
-fn find_candidate(library : &Counter<Token>) -> (Token, usize) {
+fn find_candidate(library : &Counter<Token>) -> Option<(Token, usize)> {
 	//this is a hotpath, so we are optimizing
 	//including packing the BPE pairs into a single u32 
 	let pair_counts : Counter<u32> = 
@@ -153,10 +164,17 @@ fn find_candidate(library : &Counter<Token>) -> (Token, usize) {
 				counter
 			}
 		).sum();
-	let (token, amount) = pair_counts.most_common().unwrap();
-	let top_bits : u16 = (token >> 16 ) as u16;
-	let bottom_bits : u16 = (token & 0xFFFF ) as u16;
-	(vec![top_bits, bottom_bits], amount)
+	//most_common() is a bit bug prone
+	//the only lawful reason for most_common() to be none is if there are
+	//no pairs left in the library (because every token is only 1 element long)
+	assert!(pair_counts.most_common() == None || pair_counts.len() > 0);
+	pair_counts.most_common().map(
+	|(token, amount)| {
+			let top_bits : u16 = (token >> 16 ) as u16;
+			let bottom_bits : u16 = (token & 0xFFFF ) as u16;
+			(vec![top_bits, bottom_bits], amount)
+		}
+	)
 }
 
 ///finds the bests extention; if an extention can't exist 
@@ -298,7 +316,7 @@ mod test {
 	fn test_find_candidate() {
 		let mut c = Counter::new();
 		c.update(vec!(vec!(1,1,2), vec!(1,1), vec!(1,1,2)));
-		let a = find_candidate(&c);
+		let a = find_candidate(&c).unwrap();
 		assert_eq!(a.0, vec!(1,1) );
 		assert_eq!(a.1, 3 );
 	}
@@ -335,10 +353,19 @@ mod test {
 	fn test_find_best_token() {
 		let mut c = Counter::new();
 		c.update(vec!(vec!(1,1,2), vec!(1,1), vec!(1,1,2)));
-		let a = find_best_token(&c);
+		let a = find_best_token(&c).unwrap();
 		assert_eq!(a.0, vec!(1,1,2) );
 		assert_eq!(a.1, 2 );
 	}
+	
+	#[test]
+	fn test_find_best_token_no_compression_possible() {
+		let mut c = Counter::new();
+		c.update(vec!(vec!(1), vec!(1), vec!(1)));
+		let a = find_best_token(&c);
+		assert_eq!(a, None);
+	}
+
 
 	#[test]
 	fn test_replace_in_library() {
