@@ -1,4 +1,3 @@
-#![allow(unused)]
 
 use std::fs::File;
 use std::io::{self, BufRead, Write};
@@ -18,7 +17,7 @@ type Token = Vec<u16>;
 static EXT_RATIO : usize = 2;
 
 ///beyond the 256 tokens that already exist, how many should we add?
-static NEW_TOKEN_COUNT : u16 = 1000;
+static NEW_TOKEN_COUNT : u16 = 6;
 static BASE_TOKENS : u16 = 256; //must be 256 by other assumptions in code
 //token numbers from 0 to 255 (inclusive) represent the raw bytes
 //while tokens greater than that represent compressions
@@ -26,7 +25,9 @@ static BASE_TOKENS : u16 = 256; //must be 256 by other assumptions in code
 fn main() -> io::Result<()> {
 	let file_argument : String = env::args().nth(1).unwrap_or(String::from("./AliceInWonderland.txt"));
 
+	println!("start");
 	let library = gen_word_counts(file_argument, sometimes_logger);
+	println!("end");
 	println!();
 	println!("word counts generated. distinct word count: {}", library.len());
 	let (vocab, compressed_lib) = bpe_hypergreedy(library.clone(), ticker);
@@ -45,14 +46,18 @@ fn main() -> io::Result<()> {
 }
 
 fn ticker(i : u16) {
-	if i % (NEW_TOKEN_COUNT / (80 - 1)) == 0 {
+	if i % (1+(NEW_TOKEN_COUNT / (80 - 1))) == 0 {
 		print!(".");
 		io::stdout().flush().unwrap();
 	}
 }
 
+///you ought to print a new line before printing anything else
+///because this function fails to print everytime
 fn sometimes_logger(i : usize) {
-	if i % 100_000 == 0 {
+	//move to 1 based indexing
+	let i = i + 1;
+	if i % (1<<20) == 0 {
 		print!("\rreading line: {} ", i);
 		io::stdout().flush().unwrap();
 	}
@@ -133,45 +138,70 @@ fn find_best_token(library : &Counter<Token>) -> (Token, usize) {
 	}
 }
 
+///find the most commonly occurring byte pair in the library
 fn find_candidate(library : &Counter<Token>) -> (Token, usize) {
-	let pair_counts : Counter<Token> = 
- 		library.into_iter().map(|(t, &weight)|
-			t.windows(2).map(|a| a.to_vec()).collect::<Counter<Token>>() * weight
+	//this is a hotpath, so we are optimizing
+	//including packing the BPE pairs into a single u32 
+	let pair_counts : Counter<u32> = 
+ 		library.par_iter().fold(
+			|| Counter::new(),
+			|mut counter, (t, &weight)|
+			{ counter.update_weighted(
+					t.windows(2).map(|a| ((a[0] as u32) << 16) | a[1] as u32)
+					, weight
+				);
+				counter
+			}
 		).sum();
-	pair_counts.most_common().unwrap().into()
+	let (token, amount) = pair_counts.most_common().unwrap();
+	let top_bits : u16 = (token >> 16 ) as u16;
+	let bottom_bits : u16 = (token & 0xFFFF ) as u16;
+	(vec![top_bits, bottom_bits], amount)
 }
 
+///finds the bests extention; if an extention can't exist 
+///(because this the candidate is already the longest)
 fn find_best_extention(library : &Counter<Token>, candidate : &Token) -> Option<(Token, usize)> {
-	let extention_counts : Counter<Token> = 
- 		library.into_iter().map(|(t, &weight)|
-			t.windows(candidate.len()+1)
-			 .filter(
-						|win| win[0..win.len()-1] == *candidate //try extending backwards
-							|| win[1..win.len()] == *candidate //try extending forwards
-				).map(|a| a.to_vec()).collect::<Counter<Token>>() * weight
+	let extention_counts : Counter<&[u16]> = 
+ 		library.par_iter().fold(
+			|| Counter::new(),
+			|mut counter, (t, &weight)| {
+				counter.update_weighted(
+					t.windows(candidate.len()+1)
+				 .filter(
+							|win| win[0..win.len()-1] == *candidate //try extending backwards
+								|| win[1..win.len()] == *candidate //try extending forwards
+					).map(|a| a), weight);
+					counter
+			}
 		).sum();
-	extention_counts.most_common().into()
+	//convert to ownered vector
+	extention_counts.most_common().map(|(token, weight)| (token.to_vec(), weight))
 }
 
+#[allow(unused)]
 fn echo<T> (a : T, prefix : &str) -> T 
 	where T : std::fmt::Debug {
 	println!("{:?}: {:?}", prefix, a);
 	a
 }
 
-fn gen_word_counts<P, F : Fn(usize)>(filename : P, progress_fn : F) -> Counter<Token>
+fn gen_word_counts<P>(filename : P, progress_fn : fn(usize)) -> Counter<Token>
 where P: AsRef<Path>{
 	use unicode_segmentation::UnicodeSegmentation;
 	let lines = read_lines(filename).unwrap();
 	let word_counts : Counter<Token> =
-		lines.map_while(Result::ok).enumerate().map(|(i,x)| {
+		lines.map_while(Result::ok).enumerate().par_bridge().fold(
+			|| Counter::new(),
+			|mut counter, (i,x)| {
 			progress_fn(i);
 			//unicode_words effectively strips all the punctuation and whitespace 
 			// from the dataset and I expect it to behave preversely on chinese and japanese
-			x.unicode_words().map( 
+			counter.update(x.unicode_words().map( 
 				//turn words into Vec<u16>s
 				|s| s.as_bytes().into_iter().map(|&b| b as u16).collect::<Token>()
-			).collect::<Counter<Token>>()
+			));
+			counter
 		}).sum();
 	return word_counts;
 }
@@ -182,6 +212,7 @@ where P: AsRef<Path>, {
 	Ok(io::BufReader::new(file).lines())
 }
 
+#[allow(unused)]
 //encode a text by a vocabulary
 fn decode(text : Vec<u16>, vocab : &Vec<Token>) -> Vec<u16> {
 	text.iter().flat_map(|&c| if c < BASE_TOKENS {
@@ -202,6 +233,7 @@ fn find_prefix<'a>(map : &FxHashMap<&[u16], u16>, text: &'a Vec<u16>, start_idx:
 	&text[start_idx .. i + start_idx]
 }
 
+#[allow(unused)]
 fn encode(text : &Vec<u16>, vocab : &Vec<Token>) -> Vec<u16> {
 	let map : FxHashMap<&[u16], u16> = vocab.iter().enumerate()
 		.map(|(idx, t)| (t.as_slice(),idx as u16)).collect::<FxHashMap<_, u16>>();
@@ -209,8 +241,8 @@ fn encode(text : &Vec<u16>, vocab : &Vec<Token>) -> Vec<u16> {
 	let mut i = 0;
 	while i < text.len() {
 		if text[i] < BASE_TOKENS {
-			result.push(text[i]);
-			i += 1;
+						result.push(text[i]);
+						i += 1;
 		} else {
 			let prefix = find_prefix(&map, &text, i);
 			result.push(map[prefix]);

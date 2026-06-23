@@ -90,7 +90,19 @@ where T: Hash + Eq + Clone + Sync
 			let value = *entry;
 			private_check_current_max(&mut self.current_max, &item, value);
 			}
+	}
+
+	pub fn update_weighted<I>(&mut self, iterable: I, weight : usize) 
+	where
+		I: IntoIterator<Item = T>,
+	{
+		for item in iterable {
+			let entry = self.map.entry(item.clone()).or_insert(0);
+			*entry += weight;
+			let value = *entry;
+			private_check_current_max(&mut self.current_max, &item, value);
 		}
+	}
 
 	pub fn most_common(&self) -> Option<(T, usize)>
 	{
@@ -127,9 +139,9 @@ fn private_check_current_max<T>(current_max : &mut Option<(T, usize)>, key : &T,
 
 impl<T> Sum for Counter<T> 
 where T: Hash + Eq + Clone + Debug + Sync {
-	fn sum<I>(iter: I) -> Self
+	fn sum<I>(mut iter: I) -> Self
 		where I: Iterator<Item = Counter<T>> {
-		let mut result = Counter::new(); 
+		let mut result = iter.next().unwrap_or_else(Counter::new); 
 		for i in iter {
 			result += i;
 		}
@@ -158,7 +170,7 @@ where T: Hash + Eq {
 	}
 }
 
-///watch out! you need to manually fix 
+///watch out! you may need to manually fix self.current_max
 impl<T> IndexMut<&T> for Counter<T>
 where T: Hash + Eq + Clone {
 	fn index_mut(&mut self, index: &T) -> &mut Self::Output {
@@ -173,7 +185,7 @@ impl<T> MulAssign<usize> for Counter<T> {
 		}
 		if let Some(cm) =  &mut self.current_max {
 			//multiplying preserves maximiums so we only need to update
-			cm.1 *= 2;
+			cm.1 *= rhs;
 		}
 	}
 }
@@ -232,6 +244,15 @@ mod test {
 		assert_eq!(c.most_common().unwrap().0, "b");
 	}
 	#[test]
+	fn test_weighted_update() {
+		let mut c = Counter::new();
+		c.update_weighted(vec!("a", "b", "a"), 3);
+		assert_eq!(c.most_common().unwrap().1, 6);
+		c.update_weighted(vec!("b","b", "b", "b"), 1);
+		assert_eq!(c.most_common().unwrap().1, 7);
+		assert_eq!(c[&"a"], 6);
+	}
+	#[test]
 	fn test_index() {
 		let mut c = Counter::new();
 		c.update(vec!("a", "b", "a"));
@@ -259,6 +280,8 @@ mod test {
 		c *= 2;
 		assert_eq!(c.most_common().unwrap().1, 4);
 		assert_eq!(c.most_common().unwrap().0, "a");
+		c *= 3;
+		assert_eq!(c.most_common().unwrap().1, 12);
 	}
 	#[test]
 	fn test_sum() {
