@@ -12,8 +12,8 @@ use std::env;
 
 type Token = Vec<u16>;
 
-///extention_population * EXT_RATIO > candidate_population 
-///triggers using the extention
+///extension_population * EXT_RATIO > candidate_population 
+///triggers using the extension
 static EXT_RATIO : usize = 2;
 
 ///beyond the 256 tokens that already exist, how many should we add?
@@ -29,6 +29,9 @@ static TOTAL_TOKENS : u16 = NEW_TOKEN_COUNT + BASE_TOKENS;
 fn main() -> io::Result<()> {
 	let file_argument : String = env::args().nth(1).unwrap_or(String::from("./AliceInWonderland.txt"));
 
+	// We split the input text document into words and merge duplicate words
+	// while recording how often each word occurred as a performance optimization
+	// I believe this is standard practice for LLM BPE encoding
 	let library = gen_word_counts(file_argument, sometimes_logger);
 	println!();
 	println!("word counts generated. distinct word count: {}", library.len());
@@ -47,6 +50,9 @@ fn main() -> io::Result<()> {
 	Ok(())
 }
 
+///progress bar for training tokens
+///that *very* roughly fills 80 columns with periods 
+///as we progress
 fn ticker(i : u16) {
 	if i % (1+(NEW_TOKEN_COUNT / (80 - 1))) == 0 {
 		print!(".");
@@ -54,8 +60,11 @@ fn ticker(i : u16) {
 	}
 }
 
+///logs what line we are currently reading from the text file
+///every once and a while
+///
 ///you ought to print a new line before printing anything else
-///because this function fails to print everytime
+///because this function fails to print every time
 fn sometimes_logger(i : usize) {
 	//move to 1 based indexing
 	let i = i + 1;
@@ -66,7 +75,7 @@ fn sometimes_logger(i : usize) {
 }
 
 fn bpe<F : Fn(u16)>(mut library : Counter<Token>, progress_fn : F) -> (Vec<Token>, Counter<Token>){
-	//vocab[i] is the expantion of token number (i - base_tokens)
+	//vocab[i] is the expansion of token number (i - base_tokens)
 	let mut vocab : Vec<Token> = Vec::with_capacity(NEW_TOKEN_COUNT.into());
 	for i in 0..NEW_TOKEN_COUNT {
 		let Some((new_token, _)) = find_candidate(&library) else {
@@ -81,7 +90,7 @@ fn bpe<F : Fn(u16)>(mut library : Counter<Token>, progress_fn : F) -> (Vec<Token
 }
 
 fn bpe_hypergreedy<F : Fn(u16)>(mut library : Counter<Token>, progress_fn : F) -> (Vec<Token>, Counter<Token>) {
-	//vocab[i] is the expantion of token number (i - base_tokens)
+	//vocab[i] is the expansion of token number (i - base_tokens)
 	let mut vocab : Vec<Token> = Vec::with_capacity(NEW_TOKEN_COUNT.into());
 	for i in 0..NEW_TOKEN_COUNT {
 		let Some((new_token, _)) = find_best_token(&library) else {
@@ -95,7 +104,8 @@ fn bpe_hypergreedy<F : Fn(u16)>(mut library : Counter<Token>, progress_fn : F) -
 	(vocab, library)
 }
 
-//replaces a string with a single value
+///replaces a 'string' (actually a u16 slice)  with a single value
+///and returns the new value
 fn replace(s : &[u16], from: &[u16], to : u16) -> Vec<u16> {
 	assert!(from.len() > 0);
 	let mut result : Vec<u16> = Vec::new();
@@ -112,12 +122,16 @@ fn replace(s : &[u16], from: &[u16], to : u16) -> Vec<u16> {
 	result
 }
 
+///replaces a 'string' of u16s in each word in the library with a single value
 fn replace_in_library(library : &Counter<Token>, from : &[u16], to : u16) -> Counter<Token> {
 	let mut new_library : Counter<Token> = Counter::with_capacity(library.len());
 	for (key, count) in library {
 		let new_key = replace(key, from, to);
 		new_library[&new_key] = *count;
 	}
+	//since we using a mutating iteration, we need to restore 
+	//the class invariant which Counter has 
+	// (library.current_max is a cache of the current greatest value)
 	if let Some(cm) = &library.current_max {
 		new_library.current_max = Some((replace(&cm.0, from, to), cm.1));
 		//replacements don't change maximums (but do change keys)
@@ -125,19 +139,19 @@ fn replace_in_library(library : &Counter<Token>, from : &[u16], to : u16) -> Cou
 	new_library
 }
 
-//returns None if no more compression is possible because every word in the library
-//in only one token long
-//otherwise returns the best token
+///returns None if no more compression is possible because every word in the library
+///in only one token long
+///otherwise returns the best token
 fn find_best_token(library : &Counter<Token>) -> Option<(Token, usize)> {
 	let mut can = find_candidate(&library)?;
 	loop {
 		
 		let maybe_ext = find_best_extention(&library, &can.0);
-		//if we find at least one valid extention
+		//if we find at least one valid extension
 		if let Some(ext) = maybe_ext {
-			//if the extention occurs often enough
+			//if the extension occurs often enough
 			if  ext.1 * EXT_RATIO > can.1 {
-			//the candidate is the true extention
+			//the candidate is the true extension
 			can = ext
 			} else {
 				break Some(can)
@@ -177,7 +191,7 @@ fn find_candidate(library : &Counter<Token>) -> Option<(Token, usize)> {
 	)
 }
 
-///finds the bests extention; if an extention can't exist 
+///finds the bests extension; if an extension can't exist 
 ///(because this the candidate is already the longest)
 fn find_best_extention(library : &Counter<Token>, candidate : &Token) -> Option<(Token, usize)> {
 	let extention_counts : Counter<&[u16]> = 
@@ -193,7 +207,7 @@ fn find_best_extention(library : &Counter<Token>, candidate : &Token) -> Option<
 					counter
 			}
 		).sum();
-	//convert to ownered vector
+	//convert to owned vector
 	extention_counts.most_common().map(|(token, weight)| (token.to_vec(), weight))
 }
 
@@ -213,8 +227,12 @@ where P: AsRef<Path>{
 			|| Counter::new(),
 			|mut counter, (i,x)| {
 			progress_fn(i);
+			//WARNING:
 			//unicode_words effectively strips all the punctuation and whitespace 
-			// from the dataset and I expect it to behave preversely on chinese and japanese
+			// from the dataset and I expect it to behave perversely on Chinese and Japanese
+			// consider switching with .split(' ')
+			// if you are willing to pay the performance cost
+			// and it is appropriate for your language
 			counter.update(x.unicode_words().map( 
 				//turn words into Vec<u16>s
 				|s| s.as_bytes().into_iter().map(|&b| b as u16).collect::<Token>()
