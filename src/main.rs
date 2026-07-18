@@ -7,6 +7,9 @@ use rustc_hash::FxHashMap;
 mod counter;
 use counter::Counter;
 
+mod utils;
+use utils::{replace, replace_in_library, fertility, Token, BASE_TOKENS};
+
 mod picky_bpe;
 use picky_bpe::PickyBpe;
 
@@ -16,15 +19,12 @@ use scaffold_bpe::ScaffoldBpe;
 use rayon::prelude::*;
 use std::env;
 
-type Token = Vec<u16>;
-
 ///extension_population * EXT_RATIO > candidate_population 
 ///triggers using the extension
 static EXT_RATIO : usize = 2;
 
 ///beyond the 256 tokens that already exist, how many should we add?
 static NEW_TOKEN_COUNT : u16 = 1000;
-static BASE_TOKENS : u16 = 256; //must be 256 by other assumptions in code
 #[allow(unused)]
 static TOTAL_TOKENS : u16 = NEW_TOKEN_COUNT + BASE_TOKENS; 
 //above checks if our desired number of tokens is possible inside a u16
@@ -62,7 +62,7 @@ fn main() -> io::Result<()> {
 		let tokenized = picky_noremove.tokenize(word);
 		picky_noremove_lib[&tokenized] += count;
 	}
-	let picky_noremove_fertility = picky_bpe::fertility(&picky_noremove_lib);
+	let picky_noremove_fertility = fertility(&picky_noremove_lib);
 	println!("picky bpe (no removals) : fertility {}", picky_noremove_fertility);
 	println!("vanilla bpe             : fertility {}", old_fertility);
 	let diff = (picky_noremove_fertility - old_fertility).abs();
@@ -83,7 +83,7 @@ fn main() -> io::Result<()> {
 		let tokenized = picky.tokenize(word);
 		picky_lib[&tokenized] += count;
 	}
-	let picky_fertility = picky_bpe::fertility(&picky_lib);
+	let picky_fertility = fertility(&picky_lib);
 	println!("picky bpe (threshold={}) : fertility {}", threshold, picky_fertility);
 	
 	println!();
@@ -130,7 +130,7 @@ fn main() -> io::Result<()> {
 		let tokenized = scaffold.tokenize(word);
 		scaffold_lib[&tokenized] += count;
 	}
-	let scaffold_fertility = scaffold_bpe::fertility(&scaffold_lib);
+	let scaffold_fertility = fertility(&scaffold_lib);
 	println!("scaffold bpe : fertility {}", scaffold_fertility);
 	println!();
 	println!("improvement ratio (scaffold/bpe): {}", scaffold_fertility / old_fertility);
@@ -192,40 +192,6 @@ fn bpe_hypergreedy<F : Fn(u16)>(mut library : Counter<Token>, progress_fn : F) -
 	(vocab, library)
 }
 
-///replaces a 'string' (actually a u16 slice)  with a single value
-///and returns the new value
-fn replace(s : &[u16], from: &[u16], to : u16) -> Vec<u16> {
-	assert!(from.len() > 0);
-	let mut result : Vec<u16> = Vec::new();
-	let mut i : usize = 0;
-	while i < s.len() {
-		if i+from.len()-1 < s.len() && s[i..i+from.len()] == *from {
-			result.push(to);
-			i += from.len()
-		} else {
-			result.push(s[i]);
-			i+=1;
-		}
-	}
-	result
-}
-
-///replaces a 'string' of u16s in each word in the library with a single value
-fn replace_in_library(library : &Counter<Token>, from : &[u16], to : u16) -> Counter<Token> {
-	let mut new_library : Counter<Token> = Counter::with_capacity(library.len());
-	for (key, count) in library {
-		let new_key = replace(key, from, to);
-		new_library[&new_key] = *count;
-	}
-	//since we using a mutating iteration, we need to restore 
-	//the class invariant which Counter has 
-	// (library.current_max is a cache of the current greatest value)
-	if let Some(cm) = &library.current_max {
-		new_library.current_max = Some((replace(&cm.0, from, to), cm.1));
-		//replacements don't change maximums (but do change keys)
-	}
-	new_library
-}
 
 ///returns None if no more compression is possible because every word in the library
 ///in only one token long
@@ -394,12 +360,7 @@ fn to_string(t : &Token) -> String {
 	String::from_utf8_lossy(&x).to_string()
 }
 
-fn fertility(library : &Counter<Token>) -> f64 {
-	//take a weighted average of the token lengths
-	let total_token_lengths : usize =
-		library.into_iter().map(|(key, value)| key.len() * value).sum();
-	total_token_lengths as f64 / library.total() as f64
-}
+
 
 #[cfg(test)]
 mod test {

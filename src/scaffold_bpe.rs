@@ -2,8 +2,7 @@ use rayon::prelude::*;
 use std::collections::HashSet;
 
 use crate::counter::Counter;
-
-type Token = Vec<u16>;
+use crate::utils::{replace_in_library, Token, BASE_TOKENS};
 
 pub struct ScaffoldBpe {
     all_vocab: Vec<Token>,
@@ -22,7 +21,6 @@ impl ScaffoldBpe {
 
     pub fn train(&mut self, library: &Counter<Token>, target_normal_tokens: u16) {
         let mut library = library.clone();
-        let base_tokens = 256u16;
 
         let mut i = 0u16;
         loop {
@@ -40,7 +38,7 @@ impl ScaffoldBpe {
             x3.push(pair[1]);
 
             if let Some(existing_idx) = self.all_vocab.iter().position(|v| *v == x3) {
-                let existing_id = base_tokens + existing_idx as u16;
+                let existing_id = BASE_TOKENS + existing_idx as u16;
                 if self.is_scaffold.contains(&existing_id) {
                     self.is_scaffold.remove(&existing_id);
                     self.normal_count += 1;
@@ -50,7 +48,7 @@ impl ScaffoldBpe {
                 }
             }
 
-            let token_id = base_tokens + self.all_vocab.len() as u16;
+            let token_id = BASE_TOKENS + self.all_vocab.len() as u16;
 
             self.all_vocab.push(x3.clone());
             self.normal_count += 1;
@@ -64,13 +62,13 @@ impl ScaffoldBpe {
             let remaining_a = token_freq(&library, pair[0]);
             let remaining_b = token_freq(&library, pair[1]);
 
-            if pair[0] >= base_tokens {
+            if pair[0] >= BASE_TOKENS {
                 if remaining_a < next_pair_freq && !self.is_scaffold.contains(&pair[0]) {
                     self.is_scaffold.insert(pair[0]);
                     self.normal_count -= 1;
                 }
             }
-            if pair[1] != pair[0] && pair[1] >= base_tokens {
+            if pair[1] != pair[0] && pair[1] >= BASE_TOKENS {
                 if remaining_b < next_pair_freq && !self.is_scaffold.contains(&pair[1]) {
                     self.is_scaffold.insert(pair[1]);
                     self.normal_count -= 1;
@@ -92,7 +90,7 @@ impl ScaffoldBpe {
         let mut current: Vec<u16> = word.to_vec();
 
         for (i, vocab_entry) in self.all_vocab.iter().enumerate() {
-            let token_id = 256 + i as u16;
+            let token_id = BASE_TOKENS + i as u16;
             let mut j = 0;
             while j + vocab_entry.len() <= current.len() {
                 if current[j..j + vocab_entry.len()] == *vocab_entry {
@@ -106,7 +104,7 @@ impl ScaffoldBpe {
 
         let mut result = Vec::new();
         for &token in &current {
-            if token < 256 {
+            if token < BASE_TOKENS {
                 result.push(token);
             } else if self.is_scaffold.contains(&token) {
                 result.extend_from_slice(&self.demolish(token));
@@ -118,13 +116,13 @@ impl ScaffoldBpe {
     }
 
     fn demolish(&self, token_id: u16) -> Token {
-        if token_id < 256 {
+        if token_id < BASE_TOKENS {
             return vec![token_id];
         }
         if !self.is_scaffold.contains(&token_id) {
             return vec![token_id];
         }
-        let idx = (token_id - 256) as usize;
+        let idx = (token_id - BASE_TOKENS) as usize;
         let components = &self.all_vocab[idx];
         let mut result = Token::new();
         for &c in components {
@@ -157,41 +155,8 @@ fn find_candidate(library: &Counter<Token>) -> Option<(Token, usize)> {
     })
 }
 
-fn replace(s: &[u16], from: &[u16], to: u16) -> Vec<u16> {
-    let mut result = Vec::new();
-    let mut i = 0;
-    while i < s.len() {
-        if i + from.len() <= s.len() && s[i..i + from.len()] == *from {
-            result.push(to);
-            i += from.len();
-        } else {
-            result.push(s[i]);
-            i += 1;
-        }
-    }
-    result
-}
-
-fn replace_in_library(library: &Counter<Token>, from: &[u16], to: u16) -> Counter<Token> {
-    let mut new_library = Counter::with_capacity(library.len());
-    for (key, count) in library {
-        let new_key = replace(key, from, to);
-        new_library[&new_key] = *count;
-    }
-    if let Some(cm) = &library.current_max {
-        new_library.current_max = Some((replace(&cm.0, from, to), cm.1));
-    }
-    new_library
-}
-
 fn token_freq(library: &Counter<Token>, token_id: u16) -> usize {
     library.par_iter()
         .map(|(word, &count)| word.iter().filter(|&&t| t == token_id).count() * count)
         .sum()
-}
-
-pub fn fertility(library: &Counter<Token>) -> f64 {
-    let total_token_lengths: usize =
-        library.into_iter().map(|(key, value)| key.len() * value).sum();
-    total_token_lengths as f64 / library.total() as f64
 }
