@@ -1,12 +1,13 @@
 use crate::counter::Counter;
-use crate::utils::{replace_in_library, Token, BASE_TOKENS};
+use crate::utils::{replace_in_library, Token, BASE_TOKENS, find_candidate};
+use rayon::prelude::*;
 
-#[allow(dead_code)]
-const EXT_RATIO: usize = 2;
 
-pub fn bpe_hypergreedy<F: Fn(u16)>(mut library: Counter<Token>, progress_fn: F) -> (Vec<Token>, Counter<Token>) {
+pub fn bpe_hypergreedy<F: Fn(u16)>(mut library: Counter<Token>, 
+        new_tokens : u16, progress_fn: F) -> (Vec<Token>, Counter<Token>) {
+
     let mut vocab: Vec<Token> = Vec::new();
-    for i in 0..super::NEW_TOKEN_COUNT {
+    for i in 0..new_tokens {
         let Some((new_token, _)) = find_best_token(&library) else {
             println!("no compression is possible at {} new tokens", i);
             break;
@@ -18,13 +19,12 @@ pub fn bpe_hypergreedy<F: Fn(u16)>(mut library: Counter<Token>, progress_fn: F) 
     (vocab, library)
 }
 
-#[allow(dead_code)]
 fn find_best_token(library: &Counter<Token>) -> Option<(Token, usize)> {
-    let mut can = super::find_candidate(library)?;
+    let mut can = find_candidate(library)?;
     loop {
         let maybe_ext = find_best_extention(library, &can.0);
         if let Some(ext) = maybe_ext {
-            if ext.1 * EXT_RATIO > can.1 {
+            if ext.1 * 2 > can.1 { //if the extention occurs more than half as often
                 can = ext;
             } else {
                 break Some(can);
@@ -55,7 +55,6 @@ fn find_best_extention(library: &Counter<Token>, candidate: &Token) -> Option<(T
     extention_counts.most_common().map(|(token, weight)| (token.to_vec(), weight))
 }
 
-use rayon::prelude::*;
 
 #[cfg(test)]
 mod tests {

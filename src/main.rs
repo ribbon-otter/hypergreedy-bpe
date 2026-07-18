@@ -8,7 +8,7 @@ mod counter;
 use counter::Counter;
 
 mod utils;
-use utils::{replace, replace_in_library, fertility, Token, BASE_TOKENS};
+use utils::{replace_in_library, fertility, Token, BASE_TOKENS, find_candidate, ticker};
 
 mod picky_bpe;
 use picky_bpe::PickyBpe;
@@ -37,44 +37,24 @@ fn main() -> io::Result<()> {
 	println!();
 	println!("word counts generated. distinct word count: {}", library.len());
 	
-	let (vocab, compressed_lib) = bpe_hypergreedy(library.clone(), ticker);
-	let opt_fertility = fertility(&compressed_lib);
-	println!();
-	println!("hypergreedy bpe : fertility {}", fertility(&compressed_lib));
-	println!("hypergreedy bpe: {:?}", vocab.iter().take(10).map(to_string).collect::<Vec<_>>());
-	
-	let (vocab, compressed_lib) = bpe(library.clone(), ticker);
-	let old_fertility = fertility(&compressed_lib);
-	println!();
-	println!("bpe : fertility {}", old_fertility);
-	println!("bpe: {:?}", vocab.iter().take(10).map(to_string).collect::<Vec<_>>());
-	
-	// Sanity check: Picky BPE with no removals should match vanilla BPE exactly
-	println!();
-	println!("sanity check: picky bpe with no removals (threshold=inf)...");
-	let mut picky_noremove = PickyBpe::new(f64::INFINITY);
-	picky_noremove.train(&library, NEW_TOKEN_COUNT);
-	
-	let mut picky_noremove_lib: Counter<Token> = Counter::new();
-	for (word, &count) in &library {
-		let tokenized = picky_noremove.tokenize(word);
-		picky_noremove_lib[&tokenized] += count;
-	}
-	let picky_noremove_fertility = fertility(&picky_noremove_lib);
-	println!("picky bpe (no removals) : fertility {}", picky_noremove_fertility);
-	println!("vanilla bpe             : fertility {}", old_fertility);
-	let diff = (picky_noremove_fertility - old_fertility).abs();
-	if diff < 0.0001 {
-		println!("MATCH: picky bpe (no removals) matches vanilla bpe perfectly");
-	} else {
-		eprintln!("MISMATCH: difference = {}", diff);
-	}
+	let progress = ticker::<NEW_TOKEN_COUNT>;
 
+	let (_vocab, compressed_lib) = bpe(library.clone(), progress);
+	let bpe_fertility = fertility(&compressed_lib);
+	println!();
+	println!("bpe : fertility {}", bpe_fertility);
+	
+	let (_vocab, compressed_lib) = bpe_hypergreedy(library.clone(),
+		NEW_TOKEN_COUNT, progress);
+	let hypergreedy_fertility = fertility(&compressed_lib);
+	println!();
+	println!("hypergreedy bpe : fertility {}", hypergreedy_fertility);
+	
 	let threshold = 0.9;
 	println!();
 	println!("training picky bpe with threshold {}...", threshold);
-	let mut picky = PickyBpe::new(threshold);
-	picky.train(&library, NEW_TOKEN_COUNT);
+	let mut picky = PickyBpe::new();
+	picky.train(library.clone(), threshold, NEW_TOKEN_COUNT, progress);
 	
 	let mut picky_lib: Counter<Token> = Counter::new();
 	for (word, &count) in &library {
@@ -85,43 +65,9 @@ fn main() -> io::Result<()> {
 	println!("picky bpe (threshold={}) : fertility {}", threshold, picky_fertility);
 	
 	println!();
-	println!("improvement ratio (hypergreedy/bpe): {}", opt_fertility / old_fertility);
-	println!("improvement ratio (picky/bpe): {}", picky_fertility / old_fertility);
-	
-	// Spot check: verify specific word tokenizations match between no-removal picky and vanilla BPE
-	println!();
-	println!("spot check: comparing tokenizations against vanilla BPE...");
-	let (bpe_vocab, _bpe_compressed) = bpe(library.clone(), ticker);
-	let mut sample_words: Vec<Token> = Vec::new();
-	for (word, _) in (&library).into_iter().take(20) {
-		sample_words.push(word.clone());
-	}
-	let mut all_match = true;
-	for word in &sample_words {
-		let picky_tokens = picky_noremove.tokenize(word);
-		let compressed = apply_bpe_merges(word, &bpe_vocab);
-		if picky_tokens != compressed {
-			eprintln!("MISMATCH on {:?}: picky={:?} bpe={:?}",
-				String::from_utf8_lossy(&word.iter().map(|&b| b as u8).collect::<Vec<_>>()),
-				picky_tokens, compressed);
-			all_match = false;
-		}
-	}
-	if all_match {
-		println!("all {} sample words match", sample_words.len());
-	}
-	println!();
-	println!("vocabulary size comparison:");
-	let picky_merges = picky.events.iter().filter(|e| matches!(e, picky_bpe::Event::Merge(_, _))).count();
-	let picky_removals = picky.events.iter().filter(|e| matches!(e, picky_bpe::Event::Remove(_))).count();
-	println!("  vanilla bpe: {} tokens", bpe_vocab.len());
-	println!("  picky bpe (T={}): {} merges - {} removals = {} effective tokens", threshold,
-		picky_merges, picky_removals, picky_merges - picky_removals);
-
-	println!();
 	println!("training scaffold bpe...");
 	let mut scaffold = ScaffoldBpe::new();
-	scaffold.train(&library, NEW_TOKEN_COUNT);
+	scaffold.train(&library, NEW_TOKEN_COUNT, progress);
 	
 	let mut scaffold_lib: Counter<Token> = Counter::new();
 	for (word, &count) in &library {
@@ -131,19 +77,11 @@ fn main() -> io::Result<()> {
 	let scaffold_fertility = fertility(&scaffold_lib);
 	println!("scaffold bpe : fertility {}", scaffold_fertility);
 	println!();
-	println!("improvement ratio (scaffold/bpe): {}", scaffold_fertility / old_fertility);
+	println!("improvement ratio (hypergreedy/bpe): {}", hypergreedy_fertility / bpe_fertility);
+	println!("improvement ratio (picky/bpe): {}", picky_fertility / bpe_fertility);
+	println!("improvement ratio (scaffold/bpe): {}", scaffold_fertility / bpe_fertility);
 	
 	Ok(())
-}
-
-///progress bar for training tokens
-///that *very* roughly fills 80 columns with periods 
-///as we progress
-fn ticker(i : u16) {
-	if i % (1+(NEW_TOKEN_COUNT / (80 - 1))) == 0 {
-		print!(".");
-		io::stdout().flush().unwrap();
-	}
 }
 
 ///logs what line we are currently reading from the text file
@@ -173,50 +111,6 @@ fn bpe<F : Fn(u16)>(mut library : Counter<Token>, progress_fn : F) -> (Vec<Token
 		progress_fn(i);
 	}
 	(vocab, library)
-}
-
-
-///find the most commonly occurring byte pair in the library
-pub fn find_candidate(library : &Counter<Token>) -> Option<(Token, usize)> {
-	//this is a hotpath, so we are optimizing
-	//including packing the BPE pairs into a single u32 
-	let pair_counts : Counter<u32> = 
- 		library.par_iter().fold(
-			|| Counter::new(),
-			|mut counter, (t, &weight)|
-			{ counter.update_weighted(
-					t.windows(2).map(|a| ((a[0] as u32) << 16) | a[1] as u32)
-					, weight
-				);
-				counter
-			}
-		).sum();
-	//most_common() is a bit bug prone
-	//the only lawful reason for most_common() to be none is if there are
-	//no pairs left in the library (because every token is only 1 element long)
-	assert!(pair_counts.most_common() == None || pair_counts.len() > 0);
-	pair_counts.most_common().map(
-	|(token, amount)| {
-			let top_bits : u16 = (token >> 16 ) as u16;
-			let bottom_bits : u16 = (token & 0xFFFF ) as u16;
-			(vec![top_bits, bottom_bits], amount)
-		}
-	)
-}
-
-fn apply_bpe_merges(word: &Token, vocab: &Vec<Token>) -> Token {
-	let mut current = word.clone();
-	for (i, token) in vocab.iter().enumerate() {
-		current = replace(&current, token, i as u16 + BASE_TOKENS);
-	}
-	current
-}
-
-#[allow(unused)]
-fn echo<T> (a : T, prefix : &str) -> T 
-	where T : std::fmt::Debug {
-	println!("{:?}: {:?}", prefix, a);
-	a
 }
 
 fn gen_word_counts<P>(filename : P, progress_fn : fn(usize)) -> Counter<Token>
@@ -290,6 +184,7 @@ fn encode(text : &Vec<u16>, vocab : &Vec<Token>) -> Vec<u16> {
 }
 
 ///a simple token to string, displays ? for any meta tokens
+#[allow(unused)]
 fn to_string(t : &Token) -> String {
 	let x = 
 	t.iter().map(|&u| {
@@ -299,41 +194,9 @@ fn to_string(t : &Token) -> String {
 	String::from_utf8_lossy(&x).to_string()
 }
 
-
-
 #[cfg(test)]
 mod test {
 	use super::*;
-	
-	#[test]
-	fn test_replace() {
-		let c = vec!(1,2,3,4);
-		let a = replace(&c, &[2,3], 4);
-		assert_eq!(a, [1,4,4]);
-	}
-	#[test]
-	fn test_replace_no_match() {
-		let c = vec!(1,2,3,4);
-		let a = replace(&c, &[4,3], 4);
-		assert_eq!(a, [1,2,3,4]);
-		let a = replace(&c, &[1,2,3,4,5], 4);
-		assert_eq!(a, [1,2,3,4]);
-	}
-	#[test]
-	fn test_replace_double_replace() {
-		let c = vec!(1,2,1,2);
-		let a = replace(&c, &[1,2], 4);
-		assert_eq!(a, [4,4]);
-	}
-	
-	#[test]
-	fn test_find_candidate() {
-		let mut c = Counter::new();
-		c.update(vec!(vec!(1,1,2), vec!(1,1), vec!(1,1,2)));
-		let a = find_candidate(&c).unwrap();
-		assert_eq!(a.0, vec!(1,1) );
-		assert_eq!(a.1, 3 );
-	}
 
 	#[test]
 	fn test_replace_in_library() {
