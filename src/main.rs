@@ -16,14 +16,12 @@ use picky_bpe::PickyBpe;
 mod scaffold_bpe;
 use scaffold_bpe::ScaffoldBpe;
 
+mod hypergreedy_bpe;
+use hypergreedy_bpe::bpe_hypergreedy;
+
 use rayon::prelude::*;
 use std::env;
 
-///extension_population * EXT_RATIO > candidate_population 
-///triggers using the extension
-static EXT_RATIO : usize = 2;
-
-///beyond the 256 tokens that already exist, how many should we add?
 static NEW_TOKEN_COUNT : u16 = 1000;
 #[allow(unused)]
 static TOTAL_TOKENS : u16 = NEW_TOKEN_COUNT + BASE_TOKENS; 
@@ -177,48 +175,9 @@ fn bpe<F : Fn(u16)>(mut library : Counter<Token>, progress_fn : F) -> (Vec<Token
 	(vocab, library)
 }
 
-fn bpe_hypergreedy<F : Fn(u16)>(mut library : Counter<Token>, progress_fn : F) -> (Vec<Token>, Counter<Token>) {
-	//vocab[i] is the expansion of token number (i - base_tokens)
-	let mut vocab : Vec<Token> = Vec::with_capacity(NEW_TOKEN_COUNT.into());
-	for i in 0..NEW_TOKEN_COUNT {
-		let Some((new_token, _)) = find_best_token(&library) else {
-			println!("no compression is possible at {} new tokens", i);
-			break;
-		};
-		library = replace_in_library(&library, &new_token, i + BASE_TOKENS);
-		vocab.push(new_token);
-		progress_fn(i);
-	}
-	(vocab, library)
-}
-
-
-///returns None if no more compression is possible because every word in the library
-///in only one token long
-///otherwise returns the best token
-fn find_best_token(library : &Counter<Token>) -> Option<(Token, usize)> {
-	let mut can = find_candidate(&library)?;
-	loop {
-		
-		let maybe_ext = find_best_extention(&library, &can.0);
-		//if we find at least one valid extension
-		if let Some(ext) = maybe_ext {
-			//if the extension occurs often enough
-			if  ext.1 * EXT_RATIO > can.1 {
-			//the candidate is the true extension
-			can = ext
-			} else {
-				break Some(can)
-			}
-		} else {
-			//otherwise we found the best candidate
-			break Some(can)
-		}
-	}
-}
 
 ///find the most commonly occurring byte pair in the library
-fn find_candidate(library : &Counter<Token>) -> Option<(Token, usize)> {
+pub fn find_candidate(library : &Counter<Token>) -> Option<(Token, usize)> {
 	//this is a hotpath, so we are optimizing
 	//including packing the BPE pairs into a single u32 
 	let pair_counts : Counter<u32> = 
@@ -243,26 +202,6 @@ fn find_candidate(library : &Counter<Token>) -> Option<(Token, usize)> {
 			(vec![top_bits, bottom_bits], amount)
 		}
 	)
-}
-
-///finds the bests extension; if an extension can't exist 
-///(because this the candidate is already the longest)
-fn find_best_extention(library : &Counter<Token>, candidate : &Token) -> Option<(Token, usize)> {
-	let extention_counts : Counter<&[u16]> = 
- 		library.par_iter().fold(
-			|| Counter::new(),
-			|mut counter, (t, &weight)| {
-				counter.update_weighted(
-					t.windows(candidate.len()+1)
-				 .filter(
-							|win| win[0..win.len()-1] == *candidate //try extending backwards
-								|| win[1..win.len()] == *candidate //try extending forwards
-					).map(|a| a), weight);
-					counter
-			}
-		).sum();
-	//convert to owned vector
-	extention_counts.most_common().map(|(token, weight)| (token.to_vec(), weight))
 }
 
 fn apply_bpe_merges(word: &Token, vocab: &Vec<Token>) -> Token {
@@ -395,52 +334,6 @@ mod test {
 		assert_eq!(a.0, vec!(1,1) );
 		assert_eq!(a.1, 3 );
 	}
-
-	#[test]
-	fn test_find_best_extention_right() {
-		let mut c = Counter::new();
-		c.update(vec!(vec!(1,1,2), vec!(1,1), vec!(1,1,2)));
-		let a = find_best_extention(&c, &vec!(1,1));
-		let aa = a.unwrap();
-		assert_eq!(aa.0, vec!(1,1,2) );
-		assert_eq!(aa.1, 2 );
-	}
-
-	#[test]
-	fn test_find_best_extention_left() {
-		let mut c = Counter::new();
-		c.update(vec!(vec!(1,1,2), vec!(1,1), vec!(1,1,2)));
-		let a = find_best_extention(&c, &vec!(1,2));
-		let aa = a.unwrap();
-		assert_eq!(aa.0, vec!(1,1,2) );
-		assert_eq!(aa.1, 2 );
-	}
-
-	#[test]
-	fn test_find_best_extention_empty() {
-		let mut c = Counter::new();
-		c.update(vec!(vec!(1,1,2), vec!(1,1), vec!(1,1,2)));
-		let a = find_best_extention(&c, &vec!(1,1,2));
-		std::assert_matches!(a, None);
-	}
-
-	#[test]
-	fn test_find_best_token() {
-		let mut c = Counter::new();
-		c.update(vec!(vec!(1,1,2), vec!(1,1), vec!(1,1,2)));
-		let a = find_best_token(&c).unwrap();
-		assert_eq!(a.0, vec!(1,1,2) );
-		assert_eq!(a.1, 2 );
-	}
-	
-	#[test]
-	fn test_find_best_token_no_compression_possible() {
-		let mut c = Counter::new();
-		c.update(vec!(vec!(1), vec!(1), vec!(1)));
-		let a = find_best_token(&c);
-		assert_eq!(a, None);
-	}
-
 
 	#[test]
 	fn test_replace_in_library() {
