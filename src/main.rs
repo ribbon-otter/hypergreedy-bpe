@@ -7,7 +7,13 @@ use rustc_hash::FxHashMap;
 mod counter;
 use counter::Counter;
 
-use rayon::prelude::*; 
+mod picky_bpe;
+use picky_bpe::PickyBpe;
+
+mod scaffold_bpe;
+use scaffold_bpe::ScaffoldBpe;
+
+use rayon::prelude::*;
 use std::env;
 
 type Token = Vec<u16>;
@@ -29,24 +35,106 @@ static TOTAL_TOKENS : u16 = NEW_TOKEN_COUNT + BASE_TOKENS;
 fn main() -> io::Result<()> {
 	let file_argument : String = env::args().nth(1).unwrap_or(String::from("./AliceInWonderland.txt"));
 
-	// We split the input text document into words and merge duplicate words
-	// while recording how often each word occurred as a performance optimization
-	// I believe this is standard practice for LLM BPE encoding
 	let library = gen_word_counts(file_argument, sometimes_logger);
 	println!();
 	println!("word counts generated. distinct word count: {}", library.len());
+	
 	let (vocab, compressed_lib) = bpe_hypergreedy(library.clone(), ticker);
-	let opt_fertility =  fertility(&compressed_lib);
+	let opt_fertility = fertility(&compressed_lib);
 	println!();
 	println!("hypergreedy bpe : fertility {}", fertility(&compressed_lib));
 	println!("hypergreedy bpe: {:?}", vocab.iter().take(10).map(to_string).collect::<Vec<_>>());
+	
 	let (vocab, compressed_lib) = bpe(library.clone(), ticker);
-	let old_fertility =  fertility(&compressed_lib);
+	let old_fertility = fertility(&compressed_lib);
 	println!();
 	println!("bpe : fertility {}", old_fertility);
 	println!("bpe: {:?}", vocab.iter().take(10).map(to_string).collect::<Vec<_>>());
+	
+	// Sanity check: Picky BPE with no removals should match vanilla BPE exactly
 	println!();
-	println!("improvement ratio: {}", opt_fertility / old_fertility);
+	println!("sanity check: picky bpe with no removals (threshold=inf)...");
+	let mut picky_noremove = PickyBpe::new(f64::INFINITY);
+	picky_noremove.train(&library, NEW_TOKEN_COUNT);
+	
+	let mut picky_noremove_lib: Counter<Token> = Counter::new();
+	for (word, &count) in &library {
+		let tokenized = picky_noremove.tokenize(word);
+		picky_noremove_lib[&tokenized] += count;
+	}
+	let picky_noremove_fertility = picky_bpe::fertility(&picky_noremove_lib);
+	println!("picky bpe (no removals) : fertility {}", picky_noremove_fertility);
+	println!("vanilla bpe             : fertility {}", old_fertility);
+	let diff = (picky_noremove_fertility - old_fertility).abs();
+	if diff < 0.0001 {
+		println!("MATCH: picky bpe (no removals) matches vanilla bpe perfectly");
+	} else {
+		eprintln!("MISMATCH: difference = {}", diff);
+	}
+
+	let threshold = 0.9;
+	println!();
+	println!("training picky bpe with threshold {}...", threshold);
+	let mut picky = PickyBpe::new(threshold);
+	picky.train(&library, NEW_TOKEN_COUNT);
+	
+	let mut picky_lib: Counter<Token> = Counter::new();
+	for (word, &count) in &library {
+		let tokenized = picky.tokenize(word);
+		picky_lib[&tokenized] += count;
+	}
+	let picky_fertility = picky_bpe::fertility(&picky_lib);
+	println!("picky bpe (threshold={}) : fertility {}", threshold, picky_fertility);
+	
+	println!();
+	println!("improvement ratio (hypergreedy/bpe): {}", opt_fertility / old_fertility);
+	println!("improvement ratio (picky/bpe): {}", picky_fertility / old_fertility);
+	
+	// Spot check: verify specific word tokenizations match between no-removal picky and vanilla BPE
+	println!();
+	println!("spot check: comparing tokenizations against vanilla BPE...");
+	let (bpe_vocab, _bpe_compressed) = bpe(library.clone(), ticker);
+	let mut sample_words: Vec<Token> = Vec::new();
+	for (word, _) in (&library).into_iter().take(20) {
+		sample_words.push(word.clone());
+	}
+	let mut all_match = true;
+	for word in &sample_words {
+		let picky_tokens = picky_noremove.tokenize(word);
+		let compressed = apply_bpe_merges(word, &bpe_vocab);
+		if picky_tokens != compressed {
+			eprintln!("MISMATCH on {:?}: picky={:?} bpe={:?}",
+				String::from_utf8_lossy(&word.iter().map(|&b| b as u8).collect::<Vec<_>>()),
+				picky_tokens, compressed);
+			all_match = false;
+		}
+	}
+	if all_match {
+		println!("all {} sample words match", sample_words.len());
+	}
+	println!();
+	println!("vocabulary size comparison:");
+	let picky_merges = picky.events.iter().filter(|e| matches!(e, picky_bpe::Event::Merge(_, _))).count();
+	let picky_removals = picky.events.iter().filter(|e| matches!(e, picky_bpe::Event::Remove(_))).count();
+	println!("  vanilla bpe: {} tokens", bpe_vocab.len());
+	println!("  picky bpe (T={}): {} merges - {} removals = {} effective tokens", threshold,
+		picky_merges, picky_removals, picky_merges - picky_removals);
+
+	println!();
+	println!("training scaffold bpe...");
+	let mut scaffold = ScaffoldBpe::new();
+	scaffold.train(&library, NEW_TOKEN_COUNT);
+	
+	let mut scaffold_lib: Counter<Token> = Counter::new();
+	for (word, &count) in &library {
+		let tokenized = scaffold.tokenize(word);
+		scaffold_lib[&tokenized] += count;
+	}
+	let scaffold_fertility = scaffold_bpe::fertility(&scaffold_lib);
+	println!("scaffold bpe : fertility {}", scaffold_fertility);
+	println!();
+	println!("improvement ratio (scaffold/bpe): {}", scaffold_fertility / old_fertility);
+	
 	Ok(())
 }
 
@@ -209,6 +297,14 @@ fn find_best_extention(library : &Counter<Token>, candidate : &Token) -> Option<
 		).sum();
 	//convert to owned vector
 	extention_counts.most_common().map(|(token, weight)| (token.to_vec(), weight))
+}
+
+fn apply_bpe_merges(word: &Token, vocab: &Vec<Token>) -> Token {
+	let mut current = word.clone();
+	for (i, token) in vocab.iter().enumerate() {
+		current = replace(&current, token, i as u16 + BASE_TOKENS);
+	}
+	current
 }
 
 #[allow(unused)]
