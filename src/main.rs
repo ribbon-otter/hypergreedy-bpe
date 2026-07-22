@@ -54,13 +54,15 @@ fn main() -> io::Result<()> {
 	println!();
 	println!("training picky bpe with threshold {}...", threshold);
 	let mut picky = PickyBpe::new();
-	picky.train(library.clone(), threshold, NEW_TOKEN_COUNT, progress);
+	let ( _, picky_lib ) = picky.train(library.clone(), threshold, NEW_TOKEN_COUNT, progress);
 	
-	let mut picky_lib: Counter<Token> = Counter::new();
+	//this just tests the tokenizing code (algorithm 2), it isn't needed.
+	let mut picky_lib2: Counter<Token> = Counter::new();
 	for (word, &count) in &library {
 		let tokenized = picky.tokenize(word);
-		picky_lib[&tokenized] += count;
+		picky_lib2[&tokenized] += count;
 	}
+	assert_eq!(picky_lib, picky_lib2);
 	let picky_fertility = fertility(&picky_lib);
 	println!("picky bpe (threshold={}) : fertility {}", threshold, picky_fertility);
 	

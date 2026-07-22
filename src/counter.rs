@@ -119,6 +119,21 @@ where T: Hash + Eq + Clone + Sync
 	pub fn into_vec(self) -> Vec<(T, usize)> {
 		self.map.into_iter().collect()
 	}
+
+	pub fn map_keys<F>(&self, f : F) -> Counter<T>
+		where F : Fn(&T) -> T {
+		let mut new_library = Counter::with_capacity(self.map.len());
+		for (key, count) in &self.map {
+			let new_key = f(key);
+			//if multiple keys map to the same key the below logic breaks
+			assert!(!new_library.map.contains_key(&new_key));
+			new_library[&new_key] = *count;
+		}
+		if let Some(cm) = &self.current_max {
+			new_library.current_max = Some((f(&cm.0), cm.1));
+		}
+		new_library
+	}
 }
 
 //used to restore current_max invariant in some functions

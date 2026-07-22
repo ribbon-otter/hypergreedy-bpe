@@ -6,6 +6,7 @@ use crate::counter::Counter;
 pub type Token = Vec<u16>;
 pub const BASE_TOKENS: u16 = 256; //must be 256, since other code assumes it is 256
 
+///turns several elements into one element
 pub fn replace(s: &[u16], from: &[u16], to: u16) -> Vec<u16> {
 	let mut result = Vec::new();
 	let mut i = 0;
@@ -21,6 +22,22 @@ pub fn replace(s: &[u16], from: &[u16], to: u16) -> Vec<u16> {
 	result
 }
 
+///turns one element into several elements
+pub fn expand(s: &[u16], from: u16, to: &[u16]) -> Vec<u16> {
+	let mut result = Vec::new();
+	let mut i = 0;
+	while i < s.len() {
+		if s[i] == from {
+			result.extend(to)
+			
+		} else {
+			result.push(s[i]);
+		}
+		i += 1;
+	}
+	result
+}
+
 pub fn replace_in_library(library: &Counter<Token>, from: &[u16], to: u16) -> Counter<Token> {
 	let mut new_library = Counter::with_capacity(library.len());
 	for (key, count) in library {
@@ -32,6 +49,11 @@ pub fn replace_in_library(library: &Counter<Token>, from: &[u16], to: u16) -> Co
 	}
 	new_library
 }
+
+pub fn expand_in_library(library: &Counter<Token>, token_id: u16, expansion: &[u16]) -> Counter<Token> {
+	library.map_keys(|key| expand(key, token_id, expansion))
+}
+
 
 pub fn fertility(library: &Counter<Token>) -> f64 {
 	let total_token_lengths: usize =
@@ -101,6 +123,27 @@ mod test {
 		assert_eq!(a, [4,4]);
 	}
 	
+	#[test]
+	fn test_expand_multi() {
+		let c = vec!(1,2,1,2);
+		let a = expand(&c, 2, &[1,2]);
+		assert_eq!(a, [1,1,2,1,1,2]);
+	}
+
+	#[test]
+	fn test_expand_no_replace() {
+		let c = vec!(1,4);
+		let a = expand(&c, 2, &[1,2]);
+		assert_eq!(a, [1,4]);
+	}
+
+	#[test]
+	fn test_expand_3length() {
+		let c = vec!(1,4,3);
+		let a = expand(&c, 4, &[1,2,3]);
+		assert_eq!(a, [1,1,2,3,3]);
+	}
+
 	#[test]
 	fn test_find_candidate() {
 		let mut c = Counter::new();
