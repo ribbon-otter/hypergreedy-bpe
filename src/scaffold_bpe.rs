@@ -53,7 +53,12 @@ impl ScaffoldBpe {
 
 			library = replace_in_library(&library, &x3, token_id);
 
-			let (_token,next_pair_freq) = find_candidate(&library).unwrap();
+			let Some((_token,next_pair_freq)) = find_candidate(&library) else {
+				//TODO decide if this truly the correct result or not in this strange
+				//situation
+				println!("no compression possible at {} iterations second half", i);
+				break;
+			};
 
 			let remaining_a = token_freq(&library, pair[0]);
 			let remaining_b = token_freq(&library, pair[1]);
