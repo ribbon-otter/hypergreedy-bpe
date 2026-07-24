@@ -36,3 +36,19 @@ If your language has spaces between words, and you can tolerate the performance 
 - [LiteToken](https://arxiv.org/html/2602.04706v1) - recognizes that these scaffolding tokens are a problem and offers a method to removes them after training.
 
 Hypergreedy BPE differs from all of these because as a greedy algorithm, it doesn't remove tokens, nor does it involve different lists of tokens used during tokenization and what is ultimately passed to the model.
+
+# Experiment Result
+ran with NEW_TOKEN_COUNT = 10_000 on enwiki9 
+```
+Distinct word count: 3135030
+
+bpe : fertility 1.3882362308486853
+hypergreedy bpe : fertility 1.373368092967036
+picky bpe (threshold=0.9) : fertility 1.3826762929053154
+scaffold bpe : fertility 1.4266046479421493
+
+improvement ratio (hypergreedy/bpe): 0.9892899079052563
+improvement ratio (picky/bpe): 0.9959949626585016
+improvement ratio (scaffold/bpe): 1.027638247901085
+```
+![graph showing hypergreedy outperforms all other methods](./relative_fertility.svg)

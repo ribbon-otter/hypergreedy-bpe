@@ -8,7 +8,7 @@ pub const BASE_TOKENS: u16 = 256; //must be 256, since other code assumes it is 
 
 ///turns several elements into one element
 pub fn replace(s: &[u16], from: &[u16], to: u16) -> Vec<u16> {
-	let mut result = Vec::new();
+	let mut result = Vec::with_capacity(s.len());
 	let mut i = 0;
 	while i < s.len() {
 		if i + from.len() <= s.len() && s[i..i + from.len()] == *from {
@@ -24,7 +24,7 @@ pub fn replace(s: &[u16], from: &[u16], to: u16) -> Vec<u16> {
 
 ///turns one element into several elements
 pub fn expand(s: &[u16], from: u16, to: &[u16]) -> Vec<u16> {
-	let mut result = Vec::new();
+	let mut result = Vec::with_capacity(s.len());
 	let mut i = 0;
 	while i < s.len() {
 		if s[i] == from {
