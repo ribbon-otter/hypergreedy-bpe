@@ -1,7 +1,8 @@
-use rayon::prelude::*;
-
 use crate::counter::Counter;
-use crate::utils::{BASE_TOKENS, Token, expand, find_candidate, replace, replace_in_library, expand_in_library};
+use crate::utils::{BASE_TOKENS, 
+	Token, expand, expand_in_library,
+	find_candidate, replace, replace_in_library,
+	token_freq};
 
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -42,14 +43,8 @@ impl PickyBpe {
 			let x2 = pair[1];
 			let x3 = pair;
 
-			//TODO test that to see if par_iter actually speeds things here
-			//because tokens always 2 characters long, no need for Vec 
-			let x1_freq: usize = library.par_iter()
-				.map(|(word, &count)| word.iter().filter(|&&t| t == x1).count() * count)
-				.sum();
-			let x2_freq: usize = library.par_iter()
-				.map(|(word, &count)| word.iter().filter(|&&t| t == x2).count() * count)
-				.sum();
+			let x1_freq: usize = token_freq(&library, x1);
+			let x2_freq: usize = token_freq(&library, x2);
 
 			let new_token_id = self.vocab.len() as u16 + BASE_TOKENS;
 			self.events.push(Event::Merge(x1, x2, new_token_id));

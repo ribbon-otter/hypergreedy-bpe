@@ -21,14 +21,15 @@ use hypergreedy_bpe::bpe_hypergreedy;
 
 use rayon::prelude::*;
 use std::env;
+//inside util BASE_TOKENS
+//token numbers from 0 to 255 (inclusive) represent the raw bytes
+//while tokens greater than that represent compressions
 
-static NEW_TOKEN_COUNT : u16 = 1000;
+static NEW_TOKEN_COUNT : u16 = 10_000;
 #[allow(unused)]
 static TOTAL_TOKENS : u16 = NEW_TOKEN_COUNT + BASE_TOKENS; 
 //above checks if our desired number of tokens is possible inside a u16
 
-//token numbers from 0 to 255 (inclusive) represent the raw bytes
-//while tokens greater than that represent compressions
 
 fn main() -> io::Result<()> {
 	let file_argument : String = env::args().nth(1).unwrap_or(String::from("./AliceInWonderland.txt"));

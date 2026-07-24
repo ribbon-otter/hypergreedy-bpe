@@ -89,6 +89,15 @@ pub fn find_candidate(library : &Counter<Token>) -> Option<(Token, usize)> {
 	)
 }
 
+///count how often a token occurs inside the library
+pub fn token_freq(library: &Counter<Token>, token_id: u16) -> usize {
+	//TODO test that to see if par_iter actually speeds things here
+	//because tokens always 2 characters long, no need for Vec 
+	library.par_iter()
+		.map(|(word, &count)| word.iter().filter(|&&t| t == token_id).count() * count)
+		.sum()
+}
+
 ///progress bar for training tokens
 ///that *very* roughly fills 80 columns with periods 
 ///as we progress
